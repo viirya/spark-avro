@@ -22,6 +22,7 @@ import scala.collection.JavaConverters._
 import org.apache.avro.generic.GenericData.Fixed
 import org.apache.avro.generic.{GenericData, GenericRecord}
 import org.apache.avro.{Schema, SchemaBuilder}
+import org.apache.avro.LogicalTypes.TimestampMillis
 import org.apache.avro.SchemaBuilder._
 import org.apache.avro.Schema.Type._
 
@@ -116,17 +117,48 @@ object SchemaConverters {
       recordNamespace: String): T = {
     val fieldsAssembler: FieldAssembler[T] = schemaBuilder.fields()
     structType.fields.foreach { field =>
-      val newField = fieldsAssembler.name(field.name).`type`()
-
-      if (field.nullable) {
-        convertFieldTypeToAvro(field.dataType, newField.nullable(), field.name, recordNamespace)
-          .noDefault
-      } else {
-        convertFieldTypeToAvro(field.dataType, newField, field.name, recordNamespace)
-          .noDefault
-      }
+      val newFieldBulfer = fieldsAssembler.name(field.name)
+      buildNewField(newFieldBulfer, field, recordNamespace)
     }
     fieldsAssembler.endRecord()
+  }
+
+  private def isLogicalType(dt: DataType): Boolean = {
+    dt match {
+      // Types with logical type properties.
+      case DateType => true
+      case TimestampType => true
+      // Plain types without custom properties. 
+      case _ => false
+    }
+  }
+
+  private def buildNewField[T](
+      newFieldBulfer: FieldBuilder[T],
+      field: StructField,
+      recordNamespace: String): Unit = {
+    field.dataType match {
+      case dt if isLogicalType(dt) =>
+        val avroSchema = createAvroSchemaForField(dt)
+        newFieldBulfer.`type`(avroSchema).noDefault
+      case _ =>
+        val fieldTypeBuilder = if (field.nullable) {
+            newFieldBulfer.`type`().nullable()
+        } else {
+            newFieldBulfer.`type`()
+        }
+        convertFieldTypeToAvro(field.dataType, fieldTypeBuilder, field.name, recordNamespace)
+          .noDefault
+    }
+  }
+
+  private def createAvroSchemaForField(dt: DataType): Schema = {
+    dt match {
+      case DateType =>
+        LogicalTypes.Date().addToSchema(Schema.create(Schema.Type.INT))
+      case TimestampType =>
+        LogicalTypes.TimestampMillis().addToSchema(Schema.create(Schema.Type.LONG))
+    }
   }
 
   /**
